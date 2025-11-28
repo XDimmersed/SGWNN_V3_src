@@ -1,6 +1,4 @@
-"""
-Visualization utilities for SGWCN
-"""
+"""SGWCN 可视化工具集（训练曲线、点云、混淆矩阵等）。"""
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -16,19 +14,10 @@ def plot_training_curves(
     val_accs: List[float],
     save_path: Optional[str] = None
 ) -> None:
-    """
-    Plot training and validation curves
-    
-    Args:
-        train_losses: List of training losses
-        val_losses: List of validation losses
-        train_accs: List of training accuracies
-        val_accs: List of validation accuracies
-        save_path: Optional path to save the plot
-    """
+    """绘制训练与验证的损失/精度曲线，便于观察收敛趋势。"""
     plt.figure(figsize=(12, 5))
     
-    # Plot losses
+    # 绘制损失曲线
     plt.subplot(1, 2, 1)
     plt.plot(train_losses, label='Train Loss')
     plt.plot(val_losses, label='Val Loss')
@@ -38,7 +27,7 @@ def plot_training_curves(
     plt.legend()
     plt.grid(True)
     
-    # Plot accuracies
+    # 绘制精度曲线
     plt.subplot(1, 2, 2)
     plt.plot(train_accs, label='Train Acc')
     plt.plot(val_accs, label='Val Acc')
@@ -60,15 +49,7 @@ def visualize_point_cloud(
     title: str = "Point Cloud Visualization",
     save_path: Optional[str] = None
 ) -> None:
-    """
-    Visualize a point cloud in 3D
-    
-    Args:
-        points: Nx3 array of point coordinates
-        colors: Optional Nx3 array of RGB colors
-        title: Plot title
-        save_path: Optional path to save the plot
-    """
+    """以 3D 散点形式展示点云，可选自定义颜色。"""
     fig = plt.figure(figsize=(10, 10))
     ax = fig.add_subplot(111, projection='3d')
     
@@ -82,7 +63,7 @@ def visualize_point_cloud(
     ax.set_zlabel('Z')
     ax.set_title(title)
     
-    # Set equal aspect ratio
+    # 设置等比例坐标轴，避免形变
     max_range = np.array([
         points[:, 0].max() - points[:, 0].min(),
         points[:, 1].max() - points[:, 1].min(),
@@ -107,15 +88,7 @@ def plot_confusion_matrix(
     title: str = "Confusion Matrix",
     save_path: Optional[str] = None
 ) -> None:
-    """
-    Plot confusion matrix
-    
-    Args:
-        cm: Confusion matrix
-        class_names: List of class names
-        title: Plot title
-        save_path: Optional path to save the plot
-    """
+    """绘制混淆矩阵，展示各类别的预测情况。"""
     plt.figure(figsize=(12, 10))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
                 xticklabels=class_names,
@@ -137,15 +110,7 @@ def plot_feature_importance(
     title: str = "Feature Importance",
     save_path: Optional[str] = None
 ) -> None:
-    """
-    Plot feature importance scores
-    
-    Args:
-        importance_scores: Array of importance scores
-        feature_names: List of feature names
-        title: Plot title
-        save_path: Optional path to save the plot
-    """
+    """绘制特征重要性条形图，辅助解释模型关注点。"""
     plt.figure(figsize=(10, 6))
     y_pos = np.arange(len(feature_names))
     

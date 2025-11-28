@@ -3,7 +3,10 @@ Evaluation metrics for SGWCN
 """
 
 import torch
+"""训练/验证期间使用的评估指标与辅助统计方法。"""
+
 import numpy as np
+import torch
 from typing import Dict, List, Tuple
 from sklearn.metrics import (
     accuracy_score,
@@ -20,17 +23,7 @@ def compute_metrics(
     targets: torch.Tensor,
     num_classes: int
 ) -> Dict[str, float]:
-    """
-    Compute classification metrics
-    
-    Args:
-        predictions: Model predictions (N,)
-        targets: Ground truth labels (N,)
-        num_classes: Number of classes
-    
-    Returns:
-        Dictionary of metrics
-    """
+    """计算分类常用指标（精度/精确率/召回/F1 及分类别表现）。"""
     predictions = predictions.cpu().numpy()
     targets = targets.cpu().numpy()
     
@@ -41,7 +34,7 @@ def compute_metrics(
         'f1': f1_score(targets, predictions, average='macro')
     }
     
-    # Compute per-class metrics
+    # 逐类别计算精确率/召回/F1（原英文注释“Compute per-class metrics”）
     for i in range(num_classes):
         class_pred = (predictions == i)
         class_true = (targets == i)
@@ -64,17 +57,7 @@ def compute_top_k_accuracy(
     targets: torch.Tensor,
     k: int = 5
 ) -> float:
-    """
-    Compute top-k accuracy
-    
-    Args:
-        logits: Model logits (N, C)
-        targets: Ground truth labels (N,)
-        k: Number of top predictions to consider
-    
-    Returns:
-        Top-k accuracy
-    """
+    """计算 Top-k 精度，用于多分类评估。"""
     logits = logits.cpu().numpy()
     targets = targets.cpu().numpy()
     
@@ -86,17 +69,7 @@ def compute_confusion_matrix(
     targets: torch.Tensor,
     num_classes: int
 ) -> np.ndarray:
-    """
-    Compute confusion matrix
-    
-    Args:
-        predictions: Model predictions (N,)
-        targets: Ground truth labels (N,)
-        num_classes: Number of classes
-    
-    Returns:
-        Confusion matrix (num_classes, num_classes)
-    """
+    """生成混淆矩阵，查看各类别的混淆情况。"""
     predictions = predictions.cpu().numpy()
     targets = targets.cpu().numpy()
     
@@ -108,30 +81,20 @@ def compute_class_weights(
     num_classes: int,
     method: str = 'balanced'
 ) -> torch.Tensor:
-    """
-    Compute class weights for imbalanced datasets
-    
-    Args:
-        targets: Ground truth labels (N,)
-        num_classes: Number of classes
-        method: Weighting method ('balanced' or 'inverse')
-    
-    Returns:
-        Class weights (num_classes,)
-    """
+    """计算类别权重，用于类别不均衡场景。"""
     targets = targets.cpu().numpy()
     class_counts = np.bincount(targets, minlength=num_classes)
     
     if method == 'balanced':
-        # Balanced weights: n_samples / (n_classes * n_samples_per_class)
+        # 均衡权重：n_samples / (n_classes * n_samples_per_class)
         weights = len(targets) / (num_classes * class_counts)
     elif method == 'inverse':
-        # Inverse frequency weights
+        # 反频率权重（样本越少权重越大）
         weights = 1.0 / (class_counts + 1e-6)
     else:
         raise ValueError(f"Unknown weighting method: {method}")
-    
-    # Normalize weights
+
+    # 归一化权重，保证权重和为 1
     weights = weights / weights.sum()
     
     return torch.FloatTensor(weights)
@@ -141,16 +104,7 @@ def compute_energy_metrics(
     spike_counts: torch.Tensor,
     num_neurons: int
 ) -> Dict[str, float]:
-    """
-    Compute energy consumption metrics
-    
-    Args:
-        spike_counts: Number of spikes per neuron (N, num_neurons)
-        num_neurons: Total number of neurons
-    
-    Returns:
-        Dictionary of energy metrics
-    """
+    """根据脉冲计数估算能耗相关指标。"""
     spike_counts = spike_counts.cpu().numpy()
     
     metrics = {
