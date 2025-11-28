@@ -1,6 +1,10 @@
 """
-Spiking Graph Wavelet Convolution Network (SGWCN)
-Complete integration of all core innovations
+脉冲图小波卷积网络（SGWCN）
+--------------------------------
+本文件实现论文中的核心创新，并将其组装成完整的分类模型。代码中所有注释均以
+中文详细说明设计意图，方便快速理解。主要包含两部分：
+1. 基于局部密度的自适应稀疏图构建（SparseGraphBuilder）
+2. 支持双极脉冲的自适应图小波卷积堆栈与读出层
 """
 
 import torch
@@ -16,15 +20,15 @@ from ..utils.spike_utils import poisson_encoding
 
 class SpikingGraphWaveletNet(nn.Module):
     """
-    Complete Spiking Graph Wavelet Convolution Network
-    
-    Architecture:
-    [B,N,3] → Graph → [B,N,k] edges → Wavelet Conv → [B,T,N,F] spikes → Classification
-    
-    Core innovations:
-    1. Local density adaptive graph construction
-    2. Node-level adaptive graph wavelet convolution  
-    3. Bipolar LIF neurons with dual thresholds
+    完整的脉冲图小波卷积网络实现。
+
+    计算流程：
+    [B,N,3] 输入点云 → 构图 → [B,N,k] 稀疏邻接 → 小波卷积 → [B,T,N,F] 双极脉冲 → 读出分类。
+
+    核心特性：
+    1. 结合局部密度的自适应构图，保证稀疏但信息充分的邻域。
+    2. 节点级自适应的小波卷积核，提升几何细节捕获能力。
+    3. 带双阈值的双极 LIF 神经元，同时编码凸/凹特征，输出翻倍通道数。
     """
     
     def __init__(self,
@@ -47,31 +51,31 @@ class SpikingGraphWaveletNet(nn.Module):
                  use_faiss: bool = True,
                  readout_mode: str = 'rate'):
         """
-        Initialize SGWCN
-        
-        Args:
-            input_dim: input feature dimension (3 for xyz coordinates)
-            hidden_dims: list of hidden layer dimensions
-            num_classes: number of output classes
-            num_time_steps: number of spiking time steps
-            k_neighbors: number of nearest neighbors for graph
-            chebyshev_order: order of Chebyshev approximation
-            beta: scaling factor for adaptive σ
-            lambda_param: scaling factor for diffusion scales
-            epsilon: small value for numerical stability
-            tau_mem: membrane time constant
-            theta_pos: positive spike threshold
-            theta_neg: negative spike threshold
-            dropout: dropout rate
-            use_faiss: whether to use FAISS for kNN
-            readout_mode: spike decoding mode
+        初始化 SGWCN。
+
+        参数说明：
+            input_dim: 输入特征维度（点云默认 xyz=3）。
+            hidden_dims: 每一层小波卷积的输出维度列表。
+            num_classes: 分类类别数。
+            num_time_steps: 脉冲序列的时间步数。
+            k_neighbors: 构图时选择的近邻数量。
+            chebyshev_order: 切比雪夫近似阶数，用于小波卷积。
+            beta: 自适应 σ 的缩放因子。
+            lambda_param: 扩散尺度的缩放因子。
+            epsilon: 数值稳定性的小常数。
+            tau_mem: 膜电位时间常数。
+            theta_pos: 正阈值（激发阈值）。
+            theta_neg: 负阈值（抑制阈值）。
+            dropout: 随机失活比例，用于正则化。
+            use_faiss: 是否使用 FAISS 加速 kNN。
+            readout_mode: 脉冲解码方式（rate/count/last）。
         """
         super().__init__()
         
         self.num_time_steps = num_time_steps
         self.num_classes = num_classes
         
-        # Graph construction
+        # 图构建模块：根据局部密度产生稀疏邻接，后续层重复使用
         self.graph_builder = SparseGraphBuilder(
             k=k_neighbors,
             beta=beta,
@@ -79,22 +83,22 @@ class SpikingGraphWaveletNet(nn.Module):
             epsilon=epsilon,
             use_faiss=use_faiss
         )
-        
-        # Feature encoding (optional: learn initial features from coordinates)
+
+        # 特征编码：将原始坐标映射到高维，便于卷积学习
         self.feature_encoder = nn.Sequential(
             nn.Linear(input_dim, hidden_dims[0]),
             nn.ReLU(),
             nn.Dropout(dropout)
         )
-        
-        # Graph wavelet convolution layers
+
+        # 图小波卷积层与对应的脉冲神经元层
         self.conv_layers = nn.ModuleList()
         self.spiking_layers = nn.ModuleList()
-        
-        # Build layers
+
+        # 构建多层卷积与 LIF 神经元，除第一层外输入通道均为双极输出
         layer_dims = [hidden_dims[0]] + hidden_dims
         for i in range(len(layer_dims) - 1):
-            # Wavelet convolution
+            # 小波卷积：i>0 时输入为上层双极脉冲，通道数翻倍
             conv_layer = AdaptiveGraphWaveletConv(
                 F_in=layer_dims[i] * 2 if i > 0 else layer_dims[i],  # *2 for bipolar spikes
                 F_out=layer_dims[i+1],
@@ -102,8 +106,8 @@ class SpikingGraphWaveletNet(nn.Module):
                 dropout=dropout
             )
             self.conv_layers.append(conv_layer)
-            
-            # Bipolar LIF neuron
+
+            # 双极 LIF 神经元：将连续输出转为正/负脉冲
             spiking_layer = BipolarLIFNeuron(
                 membrane_dim=layer_dims[i+1],
                 tau_mem=tau_mem,
@@ -111,100 +115,100 @@ class SpikingGraphWaveletNet(nn.Module):
                 theta_neg=theta_neg
             )
             self.spiking_layers.append(spiking_layer)
-        
-        # Final readout with dropout
-        final_dim = hidden_dims[-1] * 2  # *2 for bipolar output
+
+        # 读出层：接收最后一层的双极脉冲（通道翻倍）并完成分类
+        final_dim = hidden_dims[-1] * 2  # *2 表示包含正负脉冲
         self.readout = SpikingReadout(
             input_dim=final_dim,
             output_dim=num_classes,
             readout_mode=readout_mode,
             dropout=dropout
         )
-        
-        # Global pooling
+
+        # 预留的全局池化，可用于替换读出策略
         self.global_pool = nn.AdaptiveAvgPool1d(1)
         
     def forward(self, point_cloud: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass of SGWCN
-        
-        Args:
-            point_cloud: [B, N, 3] input point cloud coordinates
-            
-        Returns:
-            logits: [B, num_classes] classification logits
+        模型前向传播。
+
+        参数：
+            point_cloud: [B, N, 3] 点云坐标。
+
+        返回：
+            logits: [B, num_classes] 分类预测。
         """
         B, N, _ = point_cloud.shape
         device = point_cloud.device
-        
-        # Step 1: Build adaptive graphs
+
+        # 步骤 1：基于局部密度构建自适应稀疏图
         edge_indices, edge_attrs, s_local = self.graph_builder(point_cloud)
-        
-        # Step 2: Encode initial features
+
+        # 步骤 2：编码初始特征，输出 [B, N, hidden_dim]
         x = self.feature_encoder(point_cloud)  # [B, N, hidden_dims[0]]
-        
-        # Step 3: Convert to spike trains
+
+        # 步骤 3：泊松编码，将连续值转为脉冲序列
         spike_trains = poisson_encoding(x, self.num_time_steps)  # [B, T, N, F]
-        
-        # Reset all spiking neuron states
+
+        # 重置所有脉冲神经元的膜电位，避免跨样本污染
         for layer in self.spiking_layers:
             layer.reset_state(B, N, device)
-        
-        # Step 4: Process through graph wavelet convolution layers
+
+        # 步骤 4：依次通过小波卷积和 LIF 神经元
         for i, (conv_layer, spike_layer) in enumerate(zip(self.conv_layers, self.spiking_layers)):
             layer_outputs = []
-            
-            # Process each time step
+
+            # 按时间维度循环，逐步处理脉冲序列
             for t in range(self.num_time_steps):
-                # Current time step features
+                # 取出当前时间步的节点特征
                 x_t = spike_trains[:, t, :, :]  # [B, N, F]
-                
-                # Graph wavelet convolution
+
+                # 进行图小波卷积，保持节点维度不变
                 conv_out = conv_layer(x_t, edge_indices, edge_attrs, s_local)  # [B, N, F_out]
                 layer_outputs.append(conv_out)
-            
-            # Stack time dimension and apply spiking neuron
+
+            # 将时间维堆叠再交由 LIF 神经元生成双极脉冲
             conv_output = torch.stack(layer_outputs, dim=1)  # [B, T, N, F_out]
             spike_trains = spike_layer(conv_output)  # [B, T, N, 2*F_out]
-        
-        # Step 5: Readout classification
+
+        # 步骤 5：读出层进行分类
         logits = self.readout(spike_trains)  # [B, num_classes]
-        
+
         return logits
     
     def forward_with_analysis(self, point_cloud: torch.Tensor) -> Dict:
         """
-        Forward pass with detailed analysis for debugging/visualization
-        
-        Args:
-            point_cloud: [B, N, 3] input point cloud
-            
-        Returns:
-            analysis: dictionary with intermediate results and statistics
+        带详细统计信息的前向过程，便于调试或可视化。
+
+        参数：
+            point_cloud: [B, N, 3] 点云输入。
+
+        返回：
+            analysis: 包含中间张量与统计指标的字典。
         """
         B, N, _ = point_cloud.shape
         device = point_cloud.device
-        
+
         analysis = {
             'layer_outputs': [],
             'spike_statistics': [],
             'graph_statistics': {},
             'energy_consumption': 0.0
         }
-        
-        # Build graphs with statistics
+
+        # 构建图并记录统计数据
         edge_indices, edge_attrs, s_local = self.graph_builder(point_cloud)
 
         if isinstance(edge_indices, list):
             total_edges = sum(edge_idx.shape[1] for edge_idx in edge_indices)
-            # Use first batch for statistics (single batch analysis)
+            # 仅取首个 batch 统计（原英文注释“Use first batch for statistics”）
             analysis['graph_statistics'] = self.graph_builder.get_graph_statistics(
                 edge_indices[0], edge_attrs[0], N
             )
         else:
             total_edges = edge_indices.shape[1]
-            # For concatenated edge indices, we need to extract first batch
-            # Edge indices are in range [0, B*N-1], we need [0, N-1] for first batch
+            # 对拼接后的边索引，需要过滤出第一个 batch 的节点
+            # 边索引取值范围为 [0, B*N-1]，此处只保留 [0, N-1]
             batch_mask = (edge_indices[0] < N) & (edge_indices[1] < N)
             first_batch_edges = edge_indices[:, batch_mask]
             first_batch_attrs = edge_attrs[batch_mask]
@@ -213,15 +217,15 @@ class SpikingGraphWaveletNet(nn.Module):
                 first_batch_edges, first_batch_attrs, N
             )
         
-        # Initial encoding
+        # 初始特征编码与泊松脉冲生成
         x = self.feature_encoder(point_cloud)
         spike_trains = poisson_encoding(x, self.num_time_steps)
-        
-        # Reset states
+
+        # 重置状态以防止跨调用干扰
         for layer in self.spiking_layers:
             layer.reset_state(B, N, device)
-        
-        # Process layers with analysis
+
+        # 逐层处理并收集统计信息
         for i, (conv_layer, spike_layer) in enumerate(zip(self.conv_layers, self.spiking_layers)):
             layer_outputs = []
             
@@ -233,7 +237,7 @@ class SpikingGraphWaveletNet(nn.Module):
             conv_output = torch.stack(layer_outputs, dim=1)
             spike_trains, membrane_potential = spike_layer(conv_output, return_membrane=True)
             
-            # Collect statistics
+            # 收集当前层的脉冲与膜电位统计
             layer_stats = spike_layer.get_neuron_statistics(spike_trains, membrane_potential)
             analysis['spike_statistics'].append(layer_stats)
             analysis['layer_outputs'].append({
@@ -242,18 +246,18 @@ class SpikingGraphWaveletNet(nn.Module):
                 'membrane_potential': membrane_potential.detach()
             })
             
-            # Estimate energy consumption (spikes * energy_per_spike)
+            # 估算能耗：脉冲数量 × 单次能耗
             total_spikes = spike_trains.sum().item()
             analysis['energy_consumption'] += total_spikes * 1e-12  # pJ per spike
-        
-        # Final classification
+
+        # 最终分类输出
         logits = self.readout(spike_trains)
         analysis['logits'] = logits.detach()
-        
+
         return analysis
-    
+
     def get_model_statistics(self) -> Dict:
-        """Get comprehensive model statistics"""
+        """获取模型层级与参数统计信息。"""
         total_params = sum(p.numel() for p in self.parameters())
         
         stats = {
@@ -270,32 +274,32 @@ class SpikingGraphWaveletNet(nn.Module):
     
     def estimate_energy_consumption(self, num_samples: int, points_per_sample: int) -> Dict:
         """
-        Estimate energy consumption compared to traditional ANNs
-        
-        Args:
-            num_samples: number of input samples
-            points_per_sample: number of points per sample
-            
-        Returns:
-            energy_stats: energy consumption estimates
+        估算相较传统 ANN 的能耗优势。
+
+        参数：
+            num_samples: 样本数量。
+            points_per_sample: 每个样本的点数。
+
+        返回：
+            energy_stats: 能耗估计结果。
         """
-        # Rough estimates based on literature
-        ENERGY_PER_SPIKE = 1e-12  # 1 pJ per spike
-        ENERGY_PER_FLOP = 1e-15   # 1 fJ per FLOP (for comparison)
-        
-        # Estimate spikes per forward pass
+        # 依据文献的经验值进行粗略估计
+        ENERGY_PER_SPIKE = 1e-12  # 单个脉冲约 1 皮焦耳
+        ENERGY_PER_FLOP = 1e-15   # 单次 FLOP 约 1 飞焦耳（对比用）
+
+        # 估算每层在完整时间窗口内的脉冲数量
         estimated_spikes_per_layer = []
         for i, layer in enumerate(self.spiking_layers):
-            # Assume ~10% firing rate for bipolar neurons
-            layer_dim = layer.membrane_dim * 2  # bipolar output
+            # 假设双极神经元约 10% 的放电率
+            layer_dim = layer.membrane_dim * 2  # 双极输出通道翻倍
             spikes_per_timestep = num_samples * points_per_sample * layer_dim * 0.1
             total_spikes = spikes_per_timestep * self.num_time_steps
             estimated_spikes_per_layer.append(total_spikes)
-        
+
         total_spikes = sum(estimated_spikes_per_layer)
         snn_energy = total_spikes * ENERGY_PER_SPIKE
-        
-        # Compare with equivalent ANN (rough estimate)
+
+        # 与等价 ANN 进行对比估计：卷积参数量近似为 MAC 次数
         total_flops = num_samples * points_per_sample * sum(
             layer.count_parameters() for layer in self.conv_layers
         ) * 2  # 2 FLOPs per MAC
@@ -315,8 +319,8 @@ class SpikingGraphWaveletNet(nn.Module):
 
 class SGWCNClassifier(SpikingGraphWaveletNet):
     """
-    SGWCN specifically configured for point cloud classification
-    Pre-configured for common datasets like ModelNet40
+    面向点云分类任务的 SGWCN 预设配置。
+    默认参数针对 ModelNet40 之类的数据集进行了调优。
     """
     
     def __init__(self,
@@ -324,14 +328,14 @@ class SGWCNClassifier(SpikingGraphWaveletNet):
                  num_points: int = 1024,
                  **kwargs):
         """
-        Initialize classifier with sensible defaults
-        
-        Args:
-            num_classes: number of classes (40 for ModelNet40)
-            num_points: number of points per sample
-            **kwargs: additional arguments for SpikingGraphWaveletNet
+        使用合理默认值初始化分类器。
+
+        参数：
+            num_classes: 分类类别数（ModelNet40 为 40）。
+            num_points: 每个样本的点数上限。
+            **kwargs: 传递给基类的其他配置。
         """
-        # Default configuration optimized for point cloud classification
+        # 针对点云分类的默认超参，可被用户覆盖
         defaults = {
             'hidden_dims': [64, 128, 256],
             'num_time_steps': 8,
@@ -346,7 +350,7 @@ class SGWCNClassifier(SpikingGraphWaveletNet):
             'readout_mode': 'rate'
         }
         
-        # Update with user-provided arguments
+        # 用用户传入的参数覆盖默认值
         defaults.update(kwargs)
         
         super().__init__(
@@ -358,24 +362,23 @@ class SGWCNClassifier(SpikingGraphWaveletNet):
     
     def forward(self, data: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass optimized for classification
-        
-        Args:
-            data: [B, N, 3] or [B, N, C] point cloud data
-            
-        Returns:
-            logits: [B, num_classes] classification logits
+        针对分类任务的前向过程，兼容不同输入格式。
+
+        参数：
+            data: [B, N, 3] 或 [B, N, C] 的点云张量。
+
+        返回：
+            logits: [B, num_classes] 分类预测。
         """
-        # Handle different input formats
+        # 兼容额外特征的点云，只取前三个坐标维度
         if data.shape[-1] > 3:
-            # If more than 3 channels, use only xyz coordinates
             point_cloud = data[:, :, :3]
         else:
             point_cloud = data
-        
-        # Subsample if too many points
+
+        # 若输入点过多则随机下采样，保证计算成本稳定
         if point_cloud.shape[1] > self.num_points:
             indices = torch.randperm(point_cloud.shape[1])[:self.num_points]
             point_cloud = point_cloud[:, indices, :]
-        
-        return super().forward(point_cloud) 
+
+        return super().forward(point_cloud)
